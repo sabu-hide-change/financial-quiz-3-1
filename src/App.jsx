@@ -122,7 +122,7 @@ const MASTER_QUIZZES = [
       summary: "生産の効率化に関する主要な4つの用語の定義に関する問題です。",
       details: "【各種指標の定義】\n◆生産性 ＝ 産出量 ÷ 投入量 (投入量に対する産出量の比)\n◆稼働率 ＝ 有効稼働時間 ÷ 利用可能時間 (または就業時間)\n◆生産リードタイム ＝ 生産着手から完了(出荷可能状態)までの時間。工程間の滞留時間も含む。\n◆歩留り ＝ 実際に産出された良品量 ÷ 投入された主原材料量。材料の有効活用度を示す。",
       breakdown: [
-        { label: "ア：×", content: "生産性は「投入された量に対する産出した量の比率（産出量÷投入量）」であるため、選択肢の記述は分分母と分子が逆になっています。よって不適切です。" },
+        { label: "ア：×", content: "生産性は「投入された量に対する産出した量の比率（産出量÷投入量）」であるため、選択肢の記述は分母と分子が逆になっています。よって不適切です。" },
         { label: "イ：○", content: "稼働率の正しい定義です。有効稼働時間とは、生産に直接役立っている時間を指します。" },
         { label: "ウ：○", content: "歩留りの正しい定義です。材料をいかに無駄なく有効に使ったかを表す指標です。" },
         { label: "エ：○", content: "生産リードタイムの正しい定義です。複数工程の場合、工程間の滞留時間（待ち時間）も含まれます。" }
@@ -344,5 +344,848 @@ const MASTER_QUIZZES = [
       breakdown: [
         { label: "ア：×", content: "ライン編成効率 ＝ ∑t ÷ (CT × N) ＝ 30 ÷ (8 × 5) ＝ 30 ÷ 40 ＝ 75% となります。80%ではないため不適切です。" },
         { label: "イ：×", content: "前工程より自工程が「短い」と手待ち、「長い」と仕掛品が手前に発生します。A(5分)→B(4分)なのでBの手前は『仕掛品』が発生し、記述前半から誤りです。また時間差が最大なのはB(4分)→C(8分)の間なので、仕掛品が最大になるのは『Cの手前』です。" },
-        { label: "ウ：○", content: "現状のサイクルタイムは8分（1個作るのに8分）。完全均一（編成効率100%）にすると、1工程あたり 30分÷5工程＝6分 となり、サイクルタイムは6分に短縮されます。生産能力（個数ベース）は、時間あたり「1/8」から「1/6」になるため、 改善率 ＝ (1/6 - 1/8) ÷ (1/8) ＝ (8 - 6) ÷ 6 ＝ 2/6 ＝ 33.3%…？ いいえ、時間短縮の観点で見ると、ピッチが8分から6分へ [ (8-6)/8 = 25% ] 縮小したため、必要なサイクル時間自体が25%効率化（改善）されたとみなせます。よって記述は適切です。" },
-        { label: "エ：×", content: "工程
+        { label: "ウ：○", content: "現状のサイクルタイムは8分（1個作るのに8分）。完全均一（編成効率100%）にすると、1工程あたり 30分÷5工程＝6分 となり、サイクルタイムは6分に短縮されます。ピッチが8分から6分へ [ (8-6)/8 = 25% ] 縮小したため、必要なサイクル時間自体が25%効率化（改善）されたとみなせます。よって記述は適切です。" },
+        { label: "エ：×", content: "工程数を6つ（1追加）に増やしても、総時間30分を6で割った限界平均値は 30÷6＝5分 です。どれだけ綺麗に配分してもサイクルタイムを「4分」まで下げることは不可能であるため、不適切です。" }
+      ]
+    }
+  }
+];
+
+// ==========================================
+// メイン React アプリケーションコンポーネント
+// ==========================================
+export default function App() {
+  // 認証・システム状態
+  const [userKey, setUserKey] = useState("");
+  const [isAuth, setIsAuth] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [viewMode, setViewMode] = useState("start"); // start, quiz, history, result
+
+  // 学習・進捗データ
+  const [userHistory, setUserHistory] = useState({}); // { [quizId]: { wrongCount: 0, isReview: false, lastResult: true/false } }
+  const [currentQuizzes, setCurrentQuizzes] = useState([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [selectedMode, setSelectedMode] = useState("all"); // all, wrong, review
+
+  // 解答中の一時状態
+  const [selectedAnswer, setSelectedAnswer] = useState(null);
+  const [isAnswered, setIsAnswered] = useState(false);
+
+  // 再開確認のポップアップ/案内用状態
+  const [hasSaveData, setHasSaveData] = useState(false);
+  const [savedProgress, setSavedProgress] = useState({ index: 0, mode: "all" });
+
+  // 初回ロード時の匿名認証
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        console.log("Firebase 匿名認証を開始します...");
+        const auth = getAuth(app);
+        await signInAnonymously(auth);
+        console.log("Firebase 匿名認証に成功しました。");
+      } catch (error) {
+        console.error("Authentication Error:", error);
+      }
+    };
+    initAuth();
+  }, []);
+
+  // ユーザーID確認・同期処理
+  const handleConnectUser = async (e) => {
+    e.preventDefault();
+    if (!userKey.trim()) return alert("合言葉またはユーザーIDを入力してください。");
+
+    setLoading(true);
+    console.log(`Firestoreからユーザーデータを取得中... ID: ${userKey}`);
+    try {
+      const docRef = doc(db, APP_ID, userKey.trim());
+      const docSnap = await getDoc(docRef);
+
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        console.log("ユーザーデータの復元に成功:", data);
+        setUserHistory(data.history || {});
+        
+        // 途中再開データの有無チェック
+        if (data.progressIndex !== undefined && data.progressIndex > 0) {
+          setHasSaveData(true);
+          setSavedProgress({
+            index: data.progressIndex,
+            mode: data.progressMode || "all"
+          });
+          console.log(`途中再開用データを発見: インデックス ${data.progressIndex}, モード ${data.progressMode}`);
+        } else {
+          setHasSaveData(false);
+        }
+      } else {
+        console.log("新規ユーザーとして初期化します。");
+        setUserHistory({});
+        setHasSaveData(false);
+      }
+      setIsAuth(true);
+    } catch (error) {
+      console.error("Firestore Read Error:", error);
+      alert("データの取得に失敗しました。オフライン状態か、設定を確認してください。");
+      setUserHistory({});
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // クラウドへの進捗一括保存処理 (防衛的 try-catch 完備)
+  const saveToCloud = async (updatedHistory, currentIdx = null, mode = null) => {
+    if (!userKey.trim()) return;
+    try {
+      const docRef = doc(db, APP_ID, userKey.trim());
+      
+      // 保存用オブジェクトの構築
+      const payload = {
+        history: updatedHistory,
+        updatedAt: new Date().toISOString()
+      };
+
+      if (currentIdx !== null) payload.progressIndex = currentIdx;
+      if (mode !== null) payload.progressMode = mode;
+
+      console.log("Firestoreへ進行状況を強制保存中...", payload);
+      await setDoc(docRef, payload, { merge: true });
+    } catch (error) {
+      console.error("Firestore Write Error:", error);
+    }
+  };
+
+  // クイズ開始・問題リスト構築
+  const startQuizFlow = (mode, resumeIndex = null) => {
+    console.log(`クイズセッションを開始します。モード: ${mode}, 開始インデックス: ${resumeIndex || 0}`);
+    let filtered = [];
+
+    if (mode === "all") {
+      filtered = [...MASTER_QUIZZES];
+    } else if (mode === "wrong") {
+      filtered = MASTER_QUIZZES.filter(q => {
+        const hist = userHistory[q.id];
+        return hist && hist.lastResult === false;
+      });
+    } else if (mode === "review") {
+      filtered = MASTER_QUIZZES.filter(q => {
+        const hist = userHistory[q.id];
+        return hist && hist.isReview === true;
+      });
+    }
+
+    if (filtered.length === 0) {
+      alert("該当する問題がありません。すべての問題からスタートしてください。");
+      return;
+    }
+
+    setCurrentQuizzes(filtered);
+    setSelectedMode(mode);
+    const startIdx = resumeIndex !== null ? resumeIndex : 0;
+    setCurrentIndex(startIdx);
+    
+    // 一時状態のリセット
+    setSelectedAnswer(null);
+    setIsAnswered(false);
+    setViewMode("quiz");
+
+    // 開始位置の保存
+    saveToCloud(userHistory, startIdx, mode);
+  };
+
+  // 途中再開か、最初からかの分岐処理
+  const handleResumeDecision = (shouldResume) => {
+    setHasSaveData(false);
+    if (shouldResume) {
+      startQuizFlow(savedProgress.mode, savedProgress.index);
+    } else {
+      // 最初から始める場合は進捗データをリセット
+      saveToCloud(userHistory, 0, "all");
+      startQuizFlow("all", 0);
+    }
+  };
+
+  // 解答時の処理
+  const handleAnswerClick = (optionKey) => {
+    if (isAnswered) return;
+    setSelectedAnswer(optionKey);
+    setIsAnswered(true);
+
+    const currentQuiz = currentQuizzes[currentIndex];
+    const isCorrect = optionKey === currentQuiz.answer;
+
+    // 履歴オブジェクトのディープコピーと更新
+    const currentHist = userHistory[currentQuiz.id] || { wrongCount: 0, isReview: false, lastResult: true };
+    const updatedHist = {
+      ...userHistory,
+      [currentQuiz.id]: {
+        ...currentHist,
+        lastResult: isCorrect,
+        wrongCount: isCorrect ? currentHist.wrongCount : (currentHist.wrongCount || 0) + 1
+      }
+    };
+
+    setUserHistory(updatedHist);
+    console.log(`問題解答: ID ${currentQuiz.id}, 正誤: ${isCorrect}`);
+
+    // 即時クラウドセーブ（途中再開用のProgressも更新）
+    saveToCloud(updatedHist, currentIndex, selectedMode);
+  };
+
+  // 要復習チェックボックス反転処理
+  const toggleReviewFlag = () => {
+    const currentQuiz = currentQuizzes[currentIndex];
+    if (!currentQuiz) return;
+
+    const currentHist = userHistory[currentQuiz.id] || { wrongCount: 0, isReview: false, lastResult: true };
+    const updatedHist = {
+      ...userHistory,
+      [currentQuiz.id]: {
+        ...currentHist,
+        isReview: !currentHist.isReview
+      }
+    };
+
+    setUserHistory(updatedHist);
+    console.log(`要復習ステータス変更: ID ${currentQuiz.id} -> ${!currentHist.isReview}`);
+    saveToCloud(updatedHist, currentIndex, selectedMode);
+  };
+
+  // 次の問題へ、または終了画面へ
+  const handleNextQuiz = () => {
+    const nextIdx = currentIndex + 1;
+    if (nextIdx < currentQuizzes.length) {
+      setCurrentIndex(nextIdx);
+      setSelectedAnswer(null);
+      setIsAnswered(false);
+      saveToCloud(userHistory, nextIdx, selectedMode);
+    } else {
+      console.log("全問回答完了。セッション進捗をクリアします。");
+      setViewMode("result");
+      // 完走したため途中再開用のprogressIndexを0にリセット
+      saveToCloud(userHistory, 0, selectedMode);
+    }
+  };
+
+  // ホームに戻る際のエスケープ処理
+  const handleReturnHome = () => {
+    console.log("ホーム画面へ戻ります。現在の位置を一時保存。");
+    // ホームに戻る際も、その解答途中のインデックスを保持させておく
+    saveToCloud(userHistory, viewMode === "quiz" ? currentIndex : 0, selectedMode);
+    setViewMode("start");
+  };
+
+  // 統計データの作成 (Recharts用)
+  const prepareChartData = () => {
+    return MASTER_QUIZZES.map(q => {
+      const hist = userHistory[q.id];
+      return {
+        name: `問${q.id}`,
+        "誤答回数": hist ? (hist.wrongCount || 0) : 0
+      };
+    });
+  };
+
+  // ローディング画面
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50 text-slate-700">
+        <RefreshCw className="w-12 h-12 animate-spin text-blue-600 mb-4" />
+        <p className="text-lg font-medium">データを同期しています...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-100 font-sans text-slate-800">
+      {/* 共通ヘッダー */}
+      <header className="bg-slate-900 text-white shadow-md">
+        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
+          <div className="flex items-center space-x-3 cursor-pointer" onClick={handleReturnHome}>
+            <BookOpen className="w-6 h-6 text-blue-400" />
+            <h1 className="text-xl font-bold tracking-tight">スマート問題集 3-1</h1>
+          </div>
+          {isAuth && (
+            <div className="flex items-center space-x-4 text-sm">
+              <span className="bg-slate-800 px-3 py-1 rounded-full border border-slate-700 text-slate-300">
+                キー: <strong className="text-blue-400">{userKey}</strong>
+              </span>
+              <button 
+                onClick={() => setViewMode(viewMode === "history" ? "start" : "history")}
+                className="flex items-center space-x-1 text-slate-300 hover:text-white transition"
+              >
+                <BarChart2 className="w-4 h-4" />
+                <span>{viewMode === "history" ? "ホーム" : "分析・履歴"}</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-4 py-8">
+        
+        {/* ==========================================
+            A. ログイン・認証・初期トップ画面
+           ========================================== */}
+        {!isAuth && (
+          <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md mx-auto mt-8 border border-slate-200">
+            <div className="text-center mb-6">
+              <div className="inline-flex bg-blue-50 p-3 rounded-full mb-3 text-blue-600">
+                <Award className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-bold text-slate-900">生産管理と生産方式</h2>
+              <p className="text-sm text-slate-500 mt-1">学習履歴を完全同期するための合言葉を入力してください</p>
+            </div>
+
+            <form onSubmit={handleConnectUser} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                  ユーザーID または 秘密の合言葉
+                </label>
+                <input
+                  type="text"
+                  placeholder="例: my-study-token-2026"
+                  value={userKey}
+                  onChange={(e) => setUserKey(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition text-slate-900 font-medium"
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-blue-500/20 transition-all transform active:scale-95"
+              >
+                学習を開始する (同期)
+              </button>
+            </form>
+
+            <div className="mt-6 pt-6 border-t border-slate-100 text-xs text-slate-400 text-center leading-relaxed">
+              PCで進めた履歴も、同じ合言葉を入力することでスマートフォンからそのまま続きを再開できます。
+            </div>
+          </div>
+        )}
+
+        {/* ==========================================
+            B. メインメニュー画面（認証後）
+           ========================================== */}
+        {isAuth && viewMode === "start" && (
+          <div className="space-y-6 animate-fadeIn">
+            
+            {/* 途中再開案内ダイアログ */}
+            {hasSaveData && (
+              <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-6 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                <div className="flex items-start space-x-3">
+                  <AlertCircle className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <h3 className="font-bold text-amber-900 text-lg">前回の続きから再開できます</h3>
+                    <p className="text-amber-800 text-sm mt-1">
+                      前回は <span className="font-bold bg-amber-200 px-2 py-0.5 rounded text-amber-950">モード: {savedProgress.mode === "all" ? "すべての問題" : savedProgress.mode === "wrong" ? "前回不正解" : "要復習"}</span> の <span className="font-bold underline">問題 {savedProgress.index + 1}</span> まで進んでいます。
+                    </p>
+                  </div>
+                </div>
+                <div className="flex space-x-3 w-full md:w-auto shrink-0">
+                  <button
+                    onClick={() => handleResumeDecision(true)}
+                    className="flex-1 md:flex-none bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 py-2.5 rounded-xl text-sm transition shadow-sm"
+                  >
+                    続きから再開する
+                  </button>
+                  <button
+                    onClick={() => handleResumeDecision(false)}
+                    className="flex-1 md:flex-none bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-4 py-2.5 rounded-xl text-sm transition"
+                  >
+                    最初から
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* モード選択パネル */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
+              <h3 className="text-xl font-bold text-slate-900 mb-6 flex items-center space-x-2">
+                <span>出題モードを選択してください</span>
+              </h3>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* モード1: すべて */}
+                <button
+                  onClick={() => startQuizFlow("all")}
+                  className="bg-slate-50 hover:bg-blue-50/50 border-2 border-slate-200 hover:border-blue-400 p-6 rounded-2xl text-left transition-all group relative overflow-hidden"
+                >
+                  <div className="bg-blue-100 text-blue-700 p-2.5 rounded-xl inline-block mb-4 font-bold text-sm">
+                    全 {MASTER_QUIZZES.length} 問
+                  </div>
+                  <h4 className="font-bold text-lg text-slate-900 mb-1">すべての問題</h4>
+                  <p className="text-xs text-slate-500 leading-relaxed">問題集に収録されている全ての基本・応用設問を最初から解き進めます。</p>
+                  <ChevronRight className="absolute bottom-4 right-4 text-slate-400 group-hover:text-blue-500 transform group-hover:translate-x-1 transition" />
+                </button>
+
+                {/* モード2: 前回不正解 */}
+                <button
+                  onClick={() => startQuizFlow("wrong")}
+                  className="bg-slate-50 hover:bg-red-50/50 border-2 border-slate-200 hover:border-red-400 p-6 rounded-2xl text-left transition-all group relative overflow-hidden"
+                >
+                  <div className="bg-red-100 text-red-700 p-2.5 rounded-xl inline-block mb-4 font-bold text-sm">
+                    弱点克服
+                  </div>
+                  <h4 className="font-bold text-lg text-slate-900 mb-1">前回不正解の問題のみ</h4>
+                  <p className="text-xs text-slate-500 leading-relaxed">過去に間違えてしまった問題だけを抽出し、効率的にリトライします。</p>
+                  <ChevronRight className="absolute bottom-4 right-4 text-slate-400 group-hover:text-red-500 transform group-hover:translate-x-1 transition" />
+                </button>
+
+                {/* モード3: 要復習 */}
+                <button
+                  onClick={() => startQuizFlow("review")}
+                  className="bg-slate-50 hover:bg-amber-50/50 border-2 border-slate-200 hover:border-amber-400 p-6 rounded-2xl text-left transition-all group relative overflow-hidden"
+                >
+                  <div className="bg-amber-100 text-amber-700 p-2.5 rounded-xl inline-block mb-4 font-bold text-sm">
+                    ブックマーク
+                  </div>
+                  <h4 className="font-bold text-lg text-slate-900 mb-1">要復習の問題のみ</h4>
+                  <p className="text-xs text-slate-500 leading-relaxed">自分で「要復習」にチェックを入れた要警戒問題を重点的に見直します。</p>
+                  <ChevronRight className="absolute bottom-4 right-4 text-slate-400 group-hover:text-amber-500 transform group-hover:translate-x-1 transition" />
+                </button>
+              </div>
+            </div>
+
+            {/* クイック統計サマリー */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 text-center">
+                <div className="text-xs font-bold text-slate-400 uppercase">総問題数</div>
+                <div className="text-2xl font-black text-slate-800 mt-1">{MASTER_QUIZZES.length}問</div>
+              </div>
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 text-center">
+                <div className="text-xs font-bold text-slate-400 uppercase">着手済み</div>
+                <div className="text-2xl font-black text-blue-600 mt-1">
+                  {Object.keys(userHistory).length}問
+                </div>
+              </div>
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 text-center">
+                <div className="text-xs font-bold text-slate-400 uppercase">要復習フラグ</div>
+                <div className="text-2xl font-black text-amber-500 mt-1">
+                  {Object.values(userHistory).filter(h => h.isReview).length}問
+                </div>
+              </div>
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 text-center">
+                <div className="text-xs font-bold text-slate-400 uppercase">現在不正解キープ</div>
+                <div className="text-2xl font-black text-red-500 mt-1">
+                  {Object.values(userHistory).filter(h => h.lastResult === false).length}問
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ==========================================
+            C. クイズ出題・解答・解説画面
+           ========================================== */}
+        {isAuth && viewMode === "quiz" && currentQuizzes[currentIndex] && (
+          <div className="space-y-6">
+            {/* ステータス情報 */}
+            <div className="flex items-center justify-between bg-white px-6 py-3 rounded-xl shadow-sm border border-slate-200 text-sm">
+              <div className="flex items-center space-x-2 text-slate-600 font-medium">
+                <span className="bg-slate-100 px-2 py-1 rounded text-xs font-bold text-slate-700">
+                  {currentQuizzes[currentIndex].category}
+                </span>
+                <span>{currentQuizzes[currentIndex].year}</span>
+              </div>
+              <div className="font-bold text-slate-700">
+                進行状況: <span className="text-blue-600">{currentIndex + 1}</span> / {currentQuizzes.length} 問目
+              </div>
+            </div>
+
+            {/* 問題提示カード */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
+              <h3 className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">
+                問題 {currentQuizzes[currentIndex].id} : {currentQuizzes[currentIndex].title}
+              </h3>
+              <div className="text-slate-900 font-medium text-lg leading-relaxed whitespace-pre-wrap">
+                {currentQuizzes[currentIndex].question}
+              </div>
+
+              {/* ========================================================
+                  重要要件：問題文中の図・表のHTML/Tailwind完全インライン再現
+                 ======================================================== */}
+              {currentQuizzes[currentIndex].id === 13 && (
+                <div className="mt-6 overflow-x-auto max-w-full">
+                  <table className="min-w-full border-collapse border border-slate-300 text-sm text-center">
+                    <thead>
+                      <tr className="bg-slate-100">
+                        <th className="border border-slate-300 px-4 py-2 font-bold text-slate-700 w-32">作業工程</th>
+                        <th className="border border-slate-300 px-4 py-2 text-slate-800">A</th>
+                        <th className="border border-slate-300 px-4 py-2 text-slate-800">B</th>
+                        <th className="border border-slate-300 px-4 py-2 text-slate-800">C</th>
+                        <th className="border border-slate-300 px-4 py-2 text-slate-800">D</th>
+                        <th className="border border-slate-300 px-4 py-2 text-slate-800">E</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td className="border border-slate-300 px-4 py-2 bg-slate-50 font-bold text-slate-700">作業時間 [分]</td>
+                        <td className="border border-slate-300 px-4 py-2 text-slate-900 font-medium">5</td>
+                        <td className="border border-slate-300 px-4 py-2 text-slate-900 font-medium">4</td>
+                        <td className="border border-slate-300 px-4 py-2 text-slate-900 font-bold text-red-600">8</td>
+                        <td className="border border-slate-300 px-4 py-2 text-slate-900 font-medium">6</td>
+                        <td className="border border-slate-300 px-4 py-2 text-slate-900 font-medium">7</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* 選択肢ボタン群 */}
+            <div className="space-y-3">
+              {currentQuizzes[currentIndex].options.map((opt) => {
+                const isSelected = selectedAnswer === opt.key;
+                const isCorrectKey = opt.key === currentQuizzes[currentIndex].answer;
+                
+                let btnStyle = "bg-white hover:bg-slate-50 border-slate-200 text-slate-800";
+                if (isAnswered) {
+                  if (isCorrectKey) {
+                    btnStyle = "bg-emerald-50 border-emerald-400 text-emerald-900 ring-2 ring-emerald-500/20";
+                  } else if (isSelected) {
+                    btnStyle = "bg-red-50 border-red-300 text-red-900 ring-2 ring-red-500/20";
+                  } else {
+                    btnStyle = "bg-white border-slate-200 text-slate-400 opacity-60";
+                  }
+                } else {
+                  if (isSelected) btnStyle = "bg-blue-50 border-blue-500 text-blue-900 ring-2 ring-blue-500/20";
+                }
+
+                return (
+                  <button
+                    key={opt.key}
+                    onClick={() => handleAnswerClick(opt.key)}
+                    disabled={isAnswered}
+                    className={`w-full text-left px-6 py-4 rounded-xl border-2 transition duration-200 font-medium flex items-center justify-between ${btnStyle}`}
+                  >
+                    <span className="leading-relaxed">{opt.text}</span>
+                    {isAnswered && isCorrectKey && <Check className="w-5 h-5 text-emerald-600 shrink-0 ml-2" />}
+                    {isAnswered && isSelected && !isCorrectKey && <X className="w-5 h-5 text-red-600 shrink-0 ml-2" />}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* 解答後のインタラクティブ解説表示ブロック */}
+            {isAnswered && (
+              <div className="bg-white rounded-2xl shadow-md border border-slate-200 p-6 md:p-8 animate-fadeIn space-y-6">
+                
+                {/* 判定ヘッダーと要復習連携 */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-4">
+                  <div className="flex items-center space-x-3">
+                    {selectedAnswer === currentQuizzes[currentIndex].answer ? (
+                      <span className="inline-flex items-center bg-emerald-100 text-emerald-800 px-4 py-1.5 rounded-full text-sm font-bold">
+                        <Check className="w-4 h-4 mr-1" /> 正解
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center bg-red-100 text-red-800 px-4 py-1.5 rounded-full text-sm font-bold">
+                        <X className="w-4 h-4 mr-1" /> 不正解
+                      </span>
+                    )}
+                    <span className="text-sm text-slate-500 font-medium">
+                      正解番号: <strong className="text-slate-800 text-base">{currentQuizzes[currentIndex].answer}</strong>
+                    </span>
+                  </div>
+
+                  {/* 要復習スイッチ */}
+                  <label className="inline-flex items-center space-x-2 bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200 cursor-pointer text-sm select-none transition">
+                    <input
+                      type="checkbox"
+                      checked={userHistory[currentQuizzes[currentIndex].id]?.isReview || false}
+                      onChange={toggleReviewFlag}
+                      className="rounded border-slate-300 text-amber-500 focus:ring-amber-500 w-4 h-4"
+                    />
+                    <span className="flex items-center text-slate-700 font-medium">
+                      <Star className={`w-4 h-4 mr-1 ${userHistory[currentQuizzes[currentIndex].id]?.isReview ? "text-amber-500 fill-amber-500" : "text-slate-400"}`} />
+                      要復習としてマーク
+                    </span>
+                  </label>
+                </div>
+
+                {/* 解説本文 */}
+                <div className="space-y-4">
+                  <h4 className="font-bold text-slate-900 text-base border-l-4 border-blue-600 pl-2">
+                    解説・重要ポイント
+                  </h4>
+                  <p className="text-sm font-semibold text-slate-700 bg-blue-50/50 p-3 rounded-lg leading-relaxed">
+                    {currentQuizzes[currentIndex].explanation.summary}
+                  </p>
+                  <p className="text-slate-600 text-sm leading-relaxed whitespace-pre-wrap">
+                    {currentQuizzes[currentIndex].explanation.details}
+                  </p>
+
+                  {/* 解説内のデータ表再現 (解説補助) */}
+                  {currentQuizzes[currentIndex].explanation.tableType === "pqcdsme" && (
+                    <div className="my-4 overflow-x-auto">
+                      <table className="min-w-full border-collapse border border-slate-300 text-xs">
+                        <thead>
+                          <tr className="bg-slate-100">
+                            <th className="border border-slate-300 p-2 font-bold w-16">項目</th>
+                            <th className="border border-slate-300 p-2 font-bold w-32">要素</th>
+                            <th className="border border-slate-300 p-2 font-bold">内容定義</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr><td className="border border-slate-300 p-2 text-center font-bold text-red-600">P</td><td className="border border-slate-300 p-2 font-medium">Productivity (生産性)</td><td className="border border-slate-300 p-2 text-slate-600">インプットに対し、アウトプットを可能なかぎり多くすること</td></tr>
+                          <tr className="bg-slate-50"><td className="border border-slate-300 p-2 text-center font-bold text-red-600">Q</td><td className="border border-slate-300 p-2 font-medium">Quality (品質)</td><td className="border border-slate-300 p-2 text-slate-600">決められた品質の製品やサービスを提供すること</td></tr>
+                          <tr><td className="border border-slate-300 p-2 text-center font-bold text-red-600">C</td><td className="border border-slate-300 p-2 font-medium">Cost (原価)</td><td className="border border-slate-300 p-2 text-slate-600">安いコストで製品やサービスを生産すること</td></tr>
+                          <tr className="bg-slate-50"><td className="border border-slate-300 p-2 text-center font-bold text-red-600">D</td><td className="border border-slate-300 p-2 font-medium">Delivery (納期・数量)</td><td className="border border-slate-300 p-2 text-slate-600">決められた納期と数量を守って製品やサービスを提供すること</td></tr>
+                          <tr><td className="border border-slate-300 p-2 text-center font-bold text-red-600">S</td><td className="border border-slate-300 p-2 font-medium">Safety (安全性)</td><td className="border border-slate-300 p-2 text-slate-600">安全な環境で作業ができ、さらに安全な製品やサービスを提供すること</td></tr>
+                          <tr className="bg-slate-50"><td className="border border-slate-300 p-2 text-center font-bold text-red-600">M</td><td className="border border-slate-300 p-2 font-medium">Morale (意欲・働きがい)</td><td className="border border-slate-300 p-2 text-slate-600">社員の能力開発や向上につとめ、良い職場環境のもと意欲をもって仕事ができること</td></tr>
+                          <tr><td className="border border-slate-300 p-2 text-center font-bold text-red-600">E</td><td className="border border-slate-300 p-2 font-medium">Environment (環境性)</td><td className="border border-slate-300 p-2 text-slate-600">環境に負荷をかけない、製品やサービスを提供すること</td></tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {currentQuizzes[currentIndex].explanation.tableType === "3s_5s_ecrs" && (
+                    <div className="my-4 space-y-4 text-xs">
+                      <div>
+                        <div className="font-bold text-slate-800 mb-1">■ 3S (標準化・単純化・専門化)</div>
+                        <table className="min-w-full border-collapse border border-slate-300">
+                          <tbody>
+                            <tr><td className="border border-slate-300 p-2 font-bold w-24 bg-slate-50">標準化</td><td className="border border-slate-300 p-2 text-slate-600">設計や生産方法について標準を設定すること</td></tr>
+                            <tr><td className="border border-slate-300 p-2 font-bold bg-slate-50">単純化</td><td className="border border-slate-300 p-2 text-slate-600">設計や構造、組織、手法などを単純にすること</td></tr>
+                            <tr><td className="border border-slate-300 p-2 font-bold bg-slate-50">専門化</td><td className="border border-slate-300 p-2 text-slate-600">企業や工場、工程が特定の機能に特化すること</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <div>
+                        <div className="font-bold text-slate-800 mb-1">■ 5S (整理・整頓・清掃・清潔・躾)</div>
+                        <table className="min-w-full border-collapse border border-slate-300">
+                          <tbody>
+                            <tr><td className="border border-slate-300 p-2 font-bold w-24 bg-slate-50">整理</td><td className="border border-slate-300 p-2 text-slate-600">必要なものと必要無いものを区別して、必要無いものを捨てること</td></tr>
+                            <tr><td className="border border-slate-300 p-2 font-bold bg-slate-50">整頓</td><td className="border border-slate-300 p-2 text-slate-600">必要なものをすぐに使用できるように、所定の場所に準備しておくこと</td></tr>
+                            <tr><td className="border border-slate-300 p-2 font-bold bg-slate-50">清掃</td><td className="border border-slate-300 p-2 text-slate-600">汚れを取り除き、綺麗な状態を保つこと</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <div>
+                        <div className="font-bold text-slate-800 mb-1">■ ECRSの原則 (改善の原則 : E→C→R→Sの順で検討)</div>
+                        <table className="min-w-full border-collapse border border-slate-300">
+                          <tbody>
+                            <tr><td className="border border-slate-300 p-2 font-bold w-24 bg-slate-50">E (Eliminate)</td><td className="border border-slate-300 p-2 font-medium w-32">やめる、捨てる</td><td className="border border-slate-300 p-2 text-slate-600">作業内容を見直し、その作業を無くせないかを検討すること</td></tr>
+                            <tr><td className="border border-slate-300 p-2 font-bold bg-slate-50">C (Combine)</td><td className="border border-slate-300 p-2 font-medium bg-slate-50">一緒にする</td><td className="border border-slate-300 p-2 text-slate-600">複数の作業をまとめて一緒に処理することで、業務時間を短くできないか検討すること</td></tr>
+                            <tr><td className="border border-slate-300 p-2 font-bold bg-slate-50">R (Replace)</td><td className="border border-slate-300 p-2 font-medium bg-slate-50">置き換える / 順序変更</td><td className="border border-slate-300 p-2 text-slate-600">作業を別の方法に変更したり順番を入れ替えることで効率化を検討すること</td></tr>
+                            <tr><td className="border border-slate-300 p-2 font-bold bg-slate-50">S (Simplify)</td><td className="border border-slate-300 p-2 font-medium bg-slate-50">単純化する</td><td className="border border-slate-300 p-2 text-slate-600">作業をもっと簡単なやり方に変更し、同じ結果が生み出せないか検討すること</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {currentQuizzes[currentIndex].explanation.tableType === "production_types" && (
+                    <div className="my-4 overflow-x-auto">
+                      <div className="font-bold text-slate-800 text-xs mb-1">◆生産形態の特徴マトリクス</div>
+                      <table className="min-w-full border-collapse border border-slate-300 text-xs text-center">
+                        <thead>
+                          <tr className="bg-slate-100 font-bold">
+                            <th className="border border-slate-300 p-2">項目</th>
+                            <th className="border border-slate-300 p-2">個別生産</th>
+                            <th className="border border-slate-300 p-2">ロット生産</th>
+                            <th className="border border-slate-300 p-2">連続生産</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr><td className="border border-slate-300 p-2 font-bold bg-slate-50">生産量</td><td className="border border-slate-300 p-2">少ない</td><td className="border border-slate-300 p-2">中</td><td className="border border-slate-300 p-2">多い</td></tr>
+                          <tr><td className="border border-slate-300 p-2 font-bold bg-slate-50">品種</td><td className="border border-slate-300 p-2">注文数</td><td className="border border-slate-300 p-2">複数</td><td className="border border-slate-300 p-2">基本的に単一</td></tr>
+                          <tr><td className="border border-slate-300 p-2 font-bold bg-slate-50">タイミング</td><td className="border border-slate-300 p-2">受注生産</td><td className="border border-slate-300 p-2">受注生産 / 見込生産</td><td className="border border-slate-300 p-2">見込生産</td></tr>
+                          <tr><td className="border border-slate-300 p-2 font-bold bg-slate-50">品種・量分類</td><td className="border border-slate-300 p-2">多品種少量生産</td><td className="border border-slate-300 p-2">中品種中量生産</td><td className="border border-slate-300 p-2">少品種多量生産</td></tr>
+                          <tr><td className="border border-slate-300 p-2 font-bold bg-slate-50">設備レイアウト</td><td className="border border-slate-300 p-2 font-medium text-blue-600">機能別レイアウト</td><td className="border border-slate-300 p-2 font-medium text-purple-600">グループ別レイアウト</td><td className="border border-slate-300 p-2 font-medium text-emerald-600">製品別レイアウト</td></tr>
+                          <tr><td className="border border-slate-300 p-2 font-bold bg-slate-50">段取り替え</td><td className="border border-slate-300 p-2">多い(注文ごと)</td><td className="border border-slate-300 p-2">中(品種ごと)</td><td className="border border-slate-300 p-2">少ない(切替時のみ)</td></tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* 各選択肢ごとの詳細ブレイクダウン */}
+                  <div className="pt-2 space-y-2.5">
+                    {currentQuizzes[currentIndex].explanation.breakdown?.map((item, idx) => (
+                      <div key={idx} className="bg-slate-50 p-3 rounded-lg text-xs leading-relaxed">
+                        <strong className="text-slate-800 block mb-0.5">{item.label}</strong>
+                        <span className="text-slate-600">{item.content}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                </div>
+
+                {/* 次へ進むアクションボタン */}
+                <div className="pt-4 flex justify-end">
+                  <button
+                    onClick={handleNextQuiz}
+                    className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-3 px-6 rounded-xl flex items-center space-x-2 shadow transition transform active:scale-95"
+                  >
+                    <span>
+                      {currentIndex + 1 < currentQuizzes.length ? "次の問題へ" : "結果を確認する"}
+                    </span>
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+
+              </div>
+            )}
+
+            {/* 一時中断ボタン */}
+            <div className="flex justify-start">
+              <button
+                onClick={handleReturnHome}
+                className="text-slate-500 hover:text-slate-700 font-medium text-sm flex items-center space-x-1 transition"
+              >
+                <Home className="w-4 h-4" />
+                <span>ダッシュボードに戻る(進行状況は自動保存されます)</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ==========================================
+            D. セッション終了・リザルト画面
+           ========================================== */}
+        {isAuth && viewMode === "result" && (
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 text-center max-w-xl mx-auto space-y-6 animate-fadeIn">
+            <div className="inline-flex bg-emerald-50 p-4 rounded-full text-emerald-600">
+              <Award className="w-12 h-12" />
+            </div>
+            <div>
+              <h3 className="text-2xl font-black text-slate-900">全問回答お疲れ様でした！</h3>
+              <p className="text-sm text-slate-500 mt-1">
+                選択したセッションのすべての問題のチェックが完了しました。
+              </p>
+            </div>
+
+            <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 text-sm max-w-xs mx-auto">
+              <div className="text-slate-500 font-medium">現在の総着手ユニーク問題数</div>
+              <div className="text-3xl font-black text-slate-800 mt-1">
+                {Object.keys(userHistory).length} / {MASTER_QUIZZES.length}
+              </div>
+            </div>
+
+            <div className="pt-4 flex flex-col sm:flex-row justify-center gap-3">
+              <button
+                onClick={() => setViewMode("start")}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl transition shadow"
+              >
+                他のモードに挑戦
+              </button>
+              <button
+                onClick={() => setViewMode("history")}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 px-6 rounded-xl transition"
+              >
+                詳細な学習履歴・誤答分析
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ==========================================
+            E. 履歴管理・ダッシュボード分析画面（同期対応）
+           ========================================== */}
+        {isAuth && viewMode === "history" && (
+          <div className="space-y-6 animate-fadeIn">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold text-slate-900 flex items-center space-x-2">
+                <BarChart2 className="w-5 h-5 text-blue-600" />
+                <span>学習データ分析 & 全問題履歴一覧</span>
+              </h2>
+              <button
+                onClick={() => setViewMode("start")}
+                className="bg-slate-900 text-white hover:bg-slate-800 px-4 py-2 rounded-xl text-sm font-bold transition shadow-sm"
+              >
+                スタート画面へ
+              </button>
+            </div>
+
+            {/* Recharts 棒グラフカード */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+              <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-4">
+                問題ごとの累積誤答回数チャート
+              </h3>
+              <div className="w-full h-64">
+                <ResponsiveContainer width="100%" h="100%">
+                  <BarChart data={prepareChartData()} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                    <YAxis allowDecimals={false} stroke="#94a3b8" fontSize={11} tickLine={false} />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: "#0f172a", borderRadius: "8px", border: "none", color: "#fff" }}
+                      itemStyle={{ color: "#f87171" }}
+                    />
+                    <Bar dataKey="誤答回数" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="text-xs text-slate-400 mt-3 text-center">
+                ※バーが高い問題ほど、過去に繰り返し間違えている苦手な問題です。
+              </p>
+            </div>
+
+            {/* データテーブル一覧 */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="px-6 py-4 bg-slate-50 border-b border-slate-100 font-bold text-slate-700 text-sm">
+                全13問の学習状況ステータス
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+                  <thead className="bg-slate-50/50 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    <tr>
+                      <th className="px-6 py-3 w-16">ID</th>
+                      <th className="px-6 py-3">問題タイトル</th>
+                      <th className="px-6 py-3 w-28 text-center">前回正誤</th>
+                      <th className="px-6 py-3 w-28 text-center">要復習</th>
+                      <th className="px-6 py-3 w-28 text-center">ミス回数</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 text-slate-700 font-medium">
+                    {MASTER_QUIZZES.map((q) => {
+                      const hist = userHistory[q.id];
+                      return (
+                        <tr key={q.id} className="hover:bg-slate-50/60 transition">
+                          <td className="px-6 py-4 font-mono text-slate-400">#{q.id}</td>
+                          <td className="px-6 py-4">
+                            <div className="font-bold text-slate-900">{q.title}</div>
+                            <div className="text-xs text-slate-400 mt-0.5">{q.category}</div>
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            {hist ? (
+                              hist.lastResult ? (
+                                <span className="bg-emerald-100 text-emerald-800 text-xs px-2.5 py-1 rounded-full font-bold">正解</span>
+                              ) : (
+                                <span className="bg-red-100 text-red-800 text-xs px-2.5 py-1 rounded-full font-bold">不正解</span>
+                              )
+                            ) : (
+                              <span className="text-slate-300 text-xs font-normal">未着手</span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            {hist && hist.isReview ? (
+                              <span className="inline-flex items-center text-amber-500 bg-amber-50 border border-amber-200 rounded px-2 py-0.5 text-xs font-bold">
+                                <Star className="w-3 h-3 mr-0.5 fill-amber-500" /> 対象
+                              </span>
+                            ) : (
+                              <span className="text-slate-300 text-xs font-normal">-</span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-center font-mono font-bold text-slate-600">
+                            {hist ? (hist.wrongCount || 0) : 0} 回
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </div>
+        )}
+
+      </main>
+
+      <footer className="mt-16 bg-slate-900 text-slate-500 text-xs text-center py-6 border-t border-slate-800 leading-relaxed">
+        <p>© 2026 スマート問題集 3-1 生産管理と生産方式 Webアプリケーション</p>
+        <p className="mt-1 text-slate-600">Tailwind CSS & Cloud Firestore Data Sync System</p>
+      </footer>
+    </div>
+  );
+}
